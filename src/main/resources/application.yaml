@@ -27,7 +27,7 @@ webrtc-streamer:
     cleanup-interval: 60000 # 清理间隔（毫秒），每分钟检查一次
   # 海康摄像头配置（本地测试用）
   hikvision:
-    mock-mode: true  # 启用模拟模式，无需真实摄像头
+    mock-mode: false  # 启用模拟模式，无需真实摄像头
     rtsp-base-url: rtsp://admin:password@192.168.1.100:554/Streaming/Channels/
     username: admin
     password: password123

@@ -45,7 +45,9 @@ public class HikvisionService {
             // rtsp://[username]:[password]@[ip]:[port]/Streaming/Channels/[channel][streamType]
             // channel: 通道号（1开始）
             // streamType: 码流类型（1-主码流，2-子码流）
-            String rtspUrl = String.format("rtsp://%s:%s@%s:%d/Streaming/Channels/%d%d",
+            // 海康格式：rtsp://admin:password@ip:554/Streaming/Channels/<通道号><两位码流类型>
+            // 例如：通道1主码流=101，通道1子码流=102
+            String rtspUrl = String.format("rtsp://%s:%s@%s:%d/Streaming/Channels/%d%02d",
                     username,
                     password,
                     camera.getIpAddress(),

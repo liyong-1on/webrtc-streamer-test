@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -92,6 +93,18 @@ public class WebRtcController {
     public ResponseEntity<Void> hangup(@PathVariable String peerId) {
         webRtcProxyService.hangup(peerId);
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * webrtc-streamer 连通性检测（诊断接口）
+     */
+    @GetMapping("/health/webrtc-streamer")
+    public ResponseEntity<Map<String, Object>> checkStreamerHealth() {
+        boolean ok = webRtcProxyService.healthCheck();
+        Map<String, Object> result = new HashMap<>();
+        result.put("webrtcStreamerConnected", ok);
+        result.put("message", ok ? "webrtc-streamer 可正常访问" : "webrtc-streamer 无法连接，请检查服务是否启动");
+        return ok ? ResponseEntity.ok(result) : ResponseEntity.status(503).body(result);
     }
 
     @Data

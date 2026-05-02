@@ -90,7 +90,9 @@ const startPlay = async () => {
 
     // 3. 创建 RTCPeerConnection
     pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      // 禁用 mDNS，避免 .local 地址解析超时
+      iceCandidatePoolSize: 10
     })
 
     // 4. 监听视频流
@@ -105,6 +107,12 @@ const startPlay = async () => {
     // 5. 收集并发送本地 ICE Candidate 到后端
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        const cand = event.candidate.candidate;
+        // 跳过 mDNS .local 地址，避免解析超时
+        if (cand.includes('.local')) {
+          console.log('跳过 mDNS candidate:', cand);
+          return;
+        }
         fetch('/api/webrtc/ice', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
