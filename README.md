@@ -47,11 +47,12 @@
 ### 播放流程详解
 
 1. **获取流信息**：前端调用 `POST /api/cameras/{code}/play`，后端查询摄像头、构建 RTSP 地址、创建流会话，返回 `{cameraCode, sessionId, rtspUrl}`
-2. **获取 Offer**：前端生成唯一 `peerId`，调用 `POST /api/webrtc/offer`，后端代为请求 webrtc-streamer 生成 SDP Offer 并返回
-3. **设置 Answer**：前端创建 `RTCPeerConnection`，设置 Remote Description，生成 Answer，调用 `POST /api/webrtc/answer` 由后端转发给 webrtc-streamer
-4. **ICE 交换**：前后端通过 `/api/webrtc/ice` 系列接口交换 ICE Candidate
+   - RTSP 地址格式：`rtsp://admin:password@ip:port/Streaming/Channels/<通道号><两位码流类型>`（如 `101` = 通道1主码流）
+2. **获取 Offer**：前端生成唯一 `peerId`，调用 `POST /api/webrtc/offer`，后端通过 `/api/createOffer` 向 webrtc-streamer 请求 SDP Offer 并返回给前端
+3. **设置 Answer**：前端创建 `RTCPeerConnection`，设置 Remote Description，生成 Answer，调用 `POST /api/webrtc/answer` 由后端通过 `/api/setAnswer` 转发给 webrtc-streamer
+4. **ICE 交换**：前后端通过 `/api/webrtc/ice` 系列接口交换 ICE Candidate。后端采用缓存机制：若 candidate 在 answer 完成前到达，会先缓存，待 answer 成功后批量 flush
 5. **接收视频**：WebRTC 连接建立后，浏览器 `ontrack` 事件接收 `MediaStream`，绑定到 `<video>` 标签播放
-6. **停止播放**：前端调用 `POST /api/cameras/{code}/stop` 释放流，并调用 `POST /api/webrtc/hangup/{peerId}` 断开 WebRTC 连接
+6. **停止播放**：前端调用 `POST /api/cameras/{code}/stop` 释放流，并调用 `POST /api/webrtc/hangup/{peerId}` 断开 WebRTC 连接，后端同步清理 ICE candidate 缓存
 
 ---
 
@@ -119,14 +120,21 @@ webrtc-streamer/
 ### 1. 启动 webrtc-streamer
 
 ```bash
-# Windows
-webrtc-streamer.exe -H 0.0.0.0:8000
+# Windows（推荐参数：-o 不启动内置页面，-s- 禁用外部 STUN）
+webrtc-streamer.exe -H 0.0.0.0:8000 -o -s-
 
 # Linux
-./webrtc-streamer -H 0.0.0.0:8000
+./webrtc-streamer -H 0.0.0.0:8000 -o -s-
 ```
 
-验证：浏览器访问 http://127.0.0.1:8000 应显示 webrtc-streamer 页面。
+> **参数说明**：
+> - `-o`：仅作为信令/媒体网关运行，不启动内置 Web 页面
+> - `-s-`：禁用外部 STUN 服务器（局域网环境不需要，可加速 ICE 连接）
+>
+> 如需查看 webrtc-streamer 内置页面调试用，可去掉 `-o`：
+> ```bash
+> webrtc-streamer.exe -H 0.0.0.0:8000 -s-
+> ```
 
 ### 2. 启动后端
 
@@ -195,12 +203,19 @@ webrtc-streamer:
 ### webrtc-streamer 启动参数
 
 ```bash
-# 基础启动（允许局域网访问）
-webrtc-streamer.exe -H 0.0.0.0:8000
+# 基础启动（局域网测试推荐）
+webrtc-streamer.exe -H 0.0.0.0:8000 -o -s-
 
 # 如需限制来源（生产环境建议）
-webrtc-streamer.exe -H 0.0.0.0:8000 -cors-domain=http://localhost:3000
+webrtc-streamer.exe -H 0.0.0.0:8000 -o -cors-domain=http://localhost:3000
 ```
+
+| 参数 | 说明 |
+|------|------|
+| `-H 0.0.0.0:8000` | 监听所有网卡的 8000 端口 |
+| `-o` | 仅作为网关运行，不启动内置 Web 页面 |
+| `-s-` | 禁用外部 STUN，避免局域网内 ICE 连接超时 |
+| `-cors-domain` | 限制允许跨域访问的前端域名 |
 
 ---
 
@@ -240,8 +255,8 @@ Content-Type: application/json
   "sessionId": "uuid-xxx",
   "cameraCode": "CAM001",
   "cameraName": "大门口",
-  "rtspUrl": "rtsp://localhost:8554/mock_stream_CAM001",
-  "isMockMode": true,
+  "rtspUrl": "rtsp://admin:password@localhost:8554/Streaming/Channels/101",
+  "isMockMode": false,
   "referenceCount": 1
 }
 ```
@@ -366,14 +381,31 @@ POST /api/webrtc/hangup/{peerId}
 ### 1. 视频无法播放
 
 **排查步骤：**
-1. 确认 webrtc-streamer 已启动：访问 http://127.0.0.1:8000
+1. 确认 webrtc-streamer 已启动：
+   ```bash
+   curl http://127.0.0.1:8000/api/version
+   ```
 2. 确认后端已启动且无报错：访问 http://localhost:8081/api/cameras/health
-3. 打开浏览器 F12，检查 Console 和 Network：
+3. 检查 webrtc-streamer 连通性：访问 http://localhost:8081/api/webrtc/health/webrtc-streamer
+4. 打开浏览器 F12，检查 Console 和 Network：
    - `/api/cameras/{code}/play` 是否返回 200 和 `rtspUrl`？
    - `/api/webrtc/offer` 是否返回 SDP？
    - WebRTC `connectionState` 是否为 `connected`？
 
-### 2. 后端提示 "Stream not found or inactive"
+### 2. 后端报 500 错误（createOffer / addIceCandidate）
+
+本项目已修复以下已知 500 错误场景：
+
+| 错误场景 | 原因 | 修复方式 |
+|---------|------|---------|
+| `createOffer` 500 | 使用了错误的 API 路径 `/api/call` | 改用 `/api/createOffer` |
+| `setAnswer` 后 `addIceCandidate` 500 | ICE candidate 在 answer 完成前到达 | 后端添加 `ConcurrentHashMap` 缓存机制，answer 成功后批量 flush |
+| RTSP URL 解析失败 | `UriComponentsBuilder` 对 `rtsp://` 特殊字符编码 | 改用字符串拼接构建 URL |
+| JSON 解析失败 | webrtc-streamer 返回 `Content-Type: text/plain` | 为 `RestTemplate` 添加支持 `text/plain` 的 `MappingJackson2HttpMessageConverter` |
+
+**排查**：查看 `WebRtcProxyService` 日志中的 `fullUrl` 和响应状态码。
+
+### 3. 后端提示 "Stream not found or inactive"
 
 流会话可能已被清理。原因：
 - 长时间无用户观看，超过 `idle-timeout`（默认 5 分钟）
@@ -381,7 +413,9 @@ POST /api/webrtc/hangup/{peerId}
 
 **解决**：重新点击播放即可。
 
-### 3. 如何接入真实海康摄像头？
+### 3. 如何接入摄像头（真实设备 / 本地模拟）？
+
+#### 方案 A：真实海康摄像头
 
 1. 修改 `application.yaml`：
    ```yaml
@@ -391,6 +425,38 @@ POST /api/webrtc/hangup/{peerId}
 2. 在数据库中录入摄像头信息（IP、端口、用户名、密码、通道号、码流类型）
 3. 确保 webrtc-streamer 能访问摄像头的 RTSP 端口（默认 554）
 4. 重新播放即可自动构建真实 RTSP 地址
+
+   **RTSP 地址格式**：`rtsp://admin:password@ip:554/Streaming/Channels/<通道号><两位码流类型>`
+   - 通道 1 + 主码流 → `.../Channels/101`
+   - 通道 1 + 子码流 → `.../Channels/102`
+
+#### 方案 B：本地模拟测试（无需真实摄像头）
+
+使用 **MediaMTX** + **FFmpeg** 在本地模拟海康 RTSP 流：
+
+1. **启动 MediaMTX**（RTSP 服务器）：
+   ```bash
+   mediamtx.exe
+   ```
+
+2. **FFmpeg 推流**（模拟通道 1 主码流）：
+   ```bash
+   ffmpeg -re -stream_loop -1 -i "test.mp4" -c:v libx264 -g 25 -c:a aac -f rtsp rtsp://localhost:8554/Streaming/Channels/101
+   ```
+
+3. **数据库插入模拟摄像头**：
+   ```sql
+   INSERT INTO hikvision_camera (name, code, ip_address, rtsp_port, username, password, channel, stream_type, location, status)
+   VALUES ('模拟摄像头-01', 'CAM001', 'localhost', 8554, 'admin', 'password', 1, 1, '测试区域', 1);
+   ```
+
+4. **关闭 mock 模式**并播放：
+   ```yaml
+   hikvision:
+     mock-mode: false
+   ```
+
+> **验证**：先用 VLC 播放 `rtsp://admin:password@localhost:8554/Streaming/Channels/101`，确认有画面后再测试 WebRTC 播放。
 
 ### 4. webrtc-streamer 与后端不在同一台机器
 
@@ -403,7 +469,7 @@ webrtc-streamer:
 ### 5. 前端报 "Failed to get WebRTC offer"
 
 - 检查后端日志中 `WebRtcProxyService` 是否能成功访问 webrtc-streamer
-- 确认 webrtc-streamer 的 `/api/call` 接口可用
+- 确认 webrtc-streamer 的 `/api/createOffer` 和 `/api/setAnswer` 接口可用（后端代理模式使用这两个接口，不是 `/api/call`）
 - 检查 RTSP 地址是否有效（可在 VLC 中测试播放）
 
 ---

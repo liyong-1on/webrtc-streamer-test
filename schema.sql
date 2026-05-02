@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS `hikvision_camera` (
     `username` VARCHAR(100) DEFAULT NULL COMMENT '用户名',
     `password` VARCHAR(100) DEFAULT NULL COMMENT '密码',
     `channel` INT NOT NULL DEFAULT 1 COMMENT '通道号',
-    `stream_type` INT NOT NULL DEFAULT 1 COMMENT '码流类型：1-主码流，2-子码流',
+    `stream_type` INT NOT NULL DEFAULT 1 COMMENT '码流类型：1-主码流，2-子码流。RTSP地址格式：Channels/<通道号><两位码流类型>，如101=通道1主码流，102=通道1子码流',
     `location` VARCHAR(200) DEFAULT NULL COMMENT '位置信息',
     `status` INT NOT NULL DEFAULT 1 COMMENT '状态：0-离线，1-在线',
     `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -90,3 +90,10 @@ INSERT INTO `hikvision_camera` (`name`, `code`, `ip_address`, `rtsp_port`, `user
 ('测试摄像头-62', 'CAM062', '192.168.1.112', 554, 'admin', 'password123', 1, 1, '测试区域-8', 1),
 ('测试摄像头-63', 'CAM063', '192.168.1.113', 554, 'admin', 'password123', 1, 1, '测试区域-8', 1),
 ('测试摄像头-64', 'CAM064', '192.168.1.114', 554, 'admin', 'password123', 1, 1, '测试区域-8', 1);
+
+-- 本地模拟测试摄像头（配合 MediaMTX + FFmpeg 使用）
+-- FFmpeg 推流命令：ffmpeg -re -stream_loop -1 -i "test.mp4" -c:v libx264 -g 25 -c:a aac -f rtsp rtsp://localhost:8554/Streaming/Channels/101
+UPDATE `webrtc_db`.`hikvision_camera` SET `name` = '模拟摄像头-01', `code` = 'CAM001', `ip_address` = 'localhost', `rtsp_port` = 8554, `username` = 'admin', `password` = 'password', `channel` = 1, `stream_type` = 1, `location` = '测试区域-1', `status` = 1, `create_time` = '2026-05-02 16:57:46', `update_time` = '2026-05-02 16:57:56' WHERE `id` = 1;
+UPDATE `webrtc_db`.`hikvision_camera` SET `name` = '模拟摄像头-02', `code` = 'CAM002', `ip_address` = 'localhost', `rtsp_port` = 8554, `username` = 'admin', `password` = 'password', `channel` = 1, `stream_type` = 2, `location` = '测试区域-2', `status` = 1, `create_time` = '2026-05-02 16:57:46', `update_time` = '2026-05-02 16:57:58' WHERE `id` = 2;
+
+
