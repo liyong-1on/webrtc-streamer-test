@@ -56,61 +56,147 @@ const isPlaying = ref(false)
 const isLoading = ref(false)
 const isError = ref(false)
 
-let webRtcServer = null
+let pc = null
+let peerId = null
+let icePollingInterval = null
+
+// 生成唯一 peerId
+const generatePeerId = () => {
+  return 'peer_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now()
+}
 
 // 开始播放
 const startPlay = async () => {
   isLoading.value = true
   isError.value = false
-  
+
   try {
-    // 1. 请求后端获取视频 ID
-    const response = await fetch(`/api/cameras/${props.camera.code}/play`, {
+    // 1. 请求后端获取流信息（包含 RTSP 地址）
+    const playResponse = await fetch(`/api/cameras/${props.camera.code}/play`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        userId: props.userId
-      })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: props.userId })
     })
-    
-    if (!response.ok) {
+
+    if (!playResponse.ok) {
       throw new Error('Failed to get stream info')
     }
-    
-    const streamInfo = await response.json()
-    const videoId = streamInfo.videoId
-    
-    // 2. 动态加载 webrtc-streamer-js
-    if (!window.WebRtcStreamer) {
-      await loadWebRtcStreamerScript()
+
+    const streamInfo = await playResponse.json()
+    const cameraCode = streamInfo.cameraCode
+
+    // 2. 生成 peerId（每个浏览器客户端唯一）
+    peerId = generatePeerId()
+
+    // 3. 创建 RTCPeerConnection
+    pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+    })
+
+    // 4. 监听视频流
+    pc.ontrack = (event) => {
+      if (videoElement.value && event.streams && event.streams[0]) {
+        videoElement.value.srcObject = event.streams[0]
+        isPlaying.value = true
+        console.log('✅ 视频流已接收:', cameraCode)
+      }
     }
-    
-    // 3. 创建 WebRtcStreamer 实例并连接
-    webRtcServer = new window.WebRtcStreamer(videoElement.value, 'http://127.0.0.1:8000')
-    webRtcServer.connect(videoId)
-    
-    isPlaying.value = true
-    console.log('✅ 视频播放成功:', videoId)
-    
+
+    // 5. 收集并发送本地 ICE Candidate 到后端
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        fetch('/api/webrtc/ice', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            peerId: peerId,
+            candidate: {
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex
+            }
+          })
+        }).catch(err => console.warn('发送 ICE candidate 失败:', err))
+      }
+    }
+
+    // 6. 向后端请求 Offer（后端代理与 webrtc-streamer 交互）
+    const offerResponse = await fetch('/api/webrtc/offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cameraCode: cameraCode,
+        peerId: peerId
+      })
+    })
+
+    if (!offerResponse.ok) {
+      throw new Error('Failed to get WebRTC offer')
+    }
+
+    const offer = await offerResponse.json()
+
+    // 7. 设置 Remote Description (Offer)
+    await pc.setRemoteDescription(new RTCSessionDescription({
+      type: offer.type,
+      sdp: offer.sdp
+    }))
+
+    // 8. 创建 Answer
+    const answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+
+    // 9. 发送 Answer 到后端（由后端转发给 webrtc-streamer）
+    await fetch('/api/webrtc/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cameraCode: cameraCode,
+        peerId: peerId,
+        sdp: answer.sdp,
+        type: answer.type
+      })
+    })
+
+    // 10. 轮询获取 webrtc-streamer 的 ICE Candidates
+    icePollingInterval = setInterval(async () => {
+      try {
+        const iceResponse = await fetch(`/api/webrtc/ice/${peerId}`)
+        if (iceResponse.status === 200) {
+          const candidates = await iceResponse.json()
+          for (const cand of candidates) {
+            await pc.addIceCandidate(new RTCIceCandidate({
+              candidate: cand.candidate,
+              sdpMid: cand.sdpMid,
+              sdpMLineIndex: cand.sdpMLineIndex
+            }))
+          }
+          if (candidates.length > 0) {
+            clearInterval(icePollingInterval)
+            icePollingInterval = null
+          }
+        }
+      } catch (err) {
+        // 忽略轮询错误
+      }
+    }, 1000)
+
+    // 连接状态监控
+    pc.onconnectionstatechange = () => {
+      console.log('WebRTC connection state:', pc.connectionState)
+      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        isError.value = true
+        isPlaying.value = false
+      }
+    }
+
   } catch (error) {
     console.error('❌ 播放失败:', error)
     isError.value = true
+    cleanup()
   } finally {
     isLoading.value = false
   }
-}
-
-// 动态加载 webrtc-streamer-js 脚本
-const loadWebRtcStreamerScript = () => {
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script')
-    script.src = 'http://127.0.0.1:8000/webrtcstreamer.js'
-    script.onload = resolve
-    script.onerror = reject
-    document.head.appendChild(script)
-  })
 }
 
 // 停止播放
@@ -119,25 +205,37 @@ const stopPlay = async () => {
     // 通知后端释放流
     await fetch(`/api/cameras/${props.camera.code}/stop`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        userId: props.userId
-      })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: props.userId })
     })
-    
-    // 断开 WebRTC 连接
-    if (webRtcServer) {
-      webRtcServer.disconnect()
-      webRtcServer = null
+
+    // 通知后端断开 webrtc 连接
+    if (peerId) {
+      await fetch(`/api/webrtc/hangup/${peerId}`, { method: 'POST' })
     }
-    
+
+    cleanup()
     isPlaying.value = false
     console.log('⏹ 视频已停止')
-    
+
   } catch (error) {
     console.error('停止失败:', error)
+  }
+}
+
+// 清理资源
+const cleanup = () => {
+  if (icePollingInterval) {
+    clearInterval(icePollingInterval)
+    icePollingInterval = null
+  }
+  if (pc) {
+    pc.close()
+    pc = null
+  }
+  peerId = null
+  if (videoElement.value) {
+    videoElement.value.srcObject = null
   }
 }
 
@@ -151,6 +249,8 @@ const retry = () => {
 onUnmounted(() => {
   if (isPlaying.value) {
     stopPlay()
+  } else {
+    cleanup()
   }
 })
 </script>

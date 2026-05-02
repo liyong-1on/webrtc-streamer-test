@@ -4,7 +4,7 @@ server:
 spring:
   # 数据库配置 - 使用MySQL
   datasource:
-    url: jdbc:mysql://192.168.66.128:13306/webrtc_db?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://192.168.40.130:13306/webrtc_db?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     driver-class-name: com.mysql.cj.jdbc.Driver
     username: root
     password: root

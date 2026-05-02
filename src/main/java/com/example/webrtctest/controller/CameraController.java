@@ -111,13 +111,13 @@ public class CameraController {
                 rtspUrl
         );
 
-        // 构建响应 - 返回 webrtc-streamer 的视频 ID
+        // 构建响应 - 返回 RTSP 地址和会话信息，前端通过后端信令接口建立 WebRTC 连接
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
         response.put("sessionId", session.getSessionId());
         response.put("cameraCode", code);
         response.put("cameraName", camera.getName());
-        response.put("videoId", code);  // webrtc-streamer 使用摄像头编码作为视频 ID
+        response.put("rtspUrl", rtspUrl);  // RTSP 流地址，供后端与 webrtc-streamer 交互
         response.put("isMockMode", hikvisionService.isMockMode());
         response.put("referenceCount", session.getReferenceCount());
 
